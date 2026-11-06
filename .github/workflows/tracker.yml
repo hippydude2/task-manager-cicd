@@ -4,65 +4,54 @@ name: GitHub Projects Automation
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to mark completed"
+        required: true
+        default: "1"
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   move-issue-to-done:
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
       # Step 1: Checkout repository
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
 
-      # Step 2: Find linked issues
-      - name: Move linked issues to Done
+      # Step 2: Move Issue to Done
+      - name: Move Issue to Done
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          MANUAL_ISSUE: ${{ inputs.issue_number }}
         run: |
-          if [ -z "$GH_TOKEN" ] || [ -z "$PROJECT_NUMBER" ]; then
-            echo "Missing PROJECT_TOKEN or PROJECT_NUMBER"
-            exit 1
+          if [ -n "$MANUAL_ISSUE" ]; then
+            ISSUE_NUMBERS="$MANUAL_ISSUE"
+          else
+            ISSUE_NUMBERS=$(printf '%s\n' "$PR_BODY" |
+              grep -Eio '(closes|fixes|resolves)[[:space:]]+#[0-9]+' |
+              grep -Eo '[0-9]+' | sort -u) || true
           fi
 
-          ISSUES=$(gh api graphql \
-            -f query='
-              query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $number) {
-                    closingIssuesReferences(first: 20) {
-                      nodes {
-                        url
-                      }
-                    }
-                  }
-                }
-              }' \
-            -f owner="$REPO_OWNER" \
-            -f repo="$REPO_NAME" \
-            -F number="$PR_NUMBER" \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].url')
-
-          if [ -z "$ISSUES" ]; then
+          if [ -z "$ISSUE_NUMBERS" ]; then
             echo "No linked issues found."
             exit 0
           fi
 
-          while IFS= read -r ISSUE_URL; do
-            echo "Moving $ISSUE_URL to Done"
+          for ISSUE_NUMBER in $ISSUE_NUMBERS; do
+            curl --fail-with-body -L -X PATCH \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$REPOSITORY/issues/$ISSUE_NUMBER" \
+              -d '{"state":"closed","state_reason":"completed"}'
 
-            gh project item-edit "$PROJECT_NUMBER" \
-              --owner "$REPO_OWNER" \
-              --url "$ISSUE_URL" \
-              --field "Status" \
-              --value "Done"
-          done <<< "$ISSUES"
-
-          echo "Project tracking completed!"
+            echo "Issue #$ISSUE_NUMBER marked as completed."
+          done
