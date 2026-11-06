@@ -1,0 +1,47 @@
+
+name: CI Workflow - Docker
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t task-manager:latest .
+
+      # Step 3: Run Docker container
+      - name: Run Docker container
+        run: |
+          docker run --rm \
+            -e GITHUB_USER="${{ github.actor }}" \
+            -v "${{ github.workspace }}:/workspace" \
+            task-manager:latest
+
+      # Step 4: Commit and push updated HTML
+      - name: Commit and Push HTML
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add index.html
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update task manager HTML report"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit"
+          fi
