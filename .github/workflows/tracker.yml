@@ -1,0 +1,68 @@
+
+name: GitHub Projects Automation
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  move-issue-to-done:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Find linked issues
+      - name: Move linked issues to Done
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$GH_TOKEN" ] || [ -z "$PROJECT_NUMBER" ]; then
+            echo "Missing PROJECT_TOKEN or PROJECT_NUMBER"
+            exit 1
+          fi
+
+          ISSUES=$(gh api graphql \
+            -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 20) {
+                      nodes {
+                        url
+                      }
+                    }
+                  }
+                }
+              }' \
+            -f owner="$REPO_OWNER" \
+            -f repo="$REPO_NAME" \
+            -F number="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].url')
+
+          if [ -z "$ISSUES" ]; then
+            echo "No linked issues found."
+            exit 0
+          fi
+
+          while IFS= read -r ISSUE_URL; do
+            echo "Moving $ISSUE_URL to Done"
+
+            gh project item-edit "$PROJECT_NUMBER" \
+              --owner "$REPO_OWNER" \
+              --url "$ISSUE_URL" \
+              --field "Status" \
+              --value "Done"
+          done <<< "$ISSUES"
+
+          echo "Project tracking completed!"
